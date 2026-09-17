@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -86,10 +87,38 @@ func main() {
 
 	var sigBuf [8]byte
 	for {
+		/*
+			err = waitForIO(evfd2, unix.EPOLLIN, 30*time.Second)
+			if err != nil {
+				log.Fatalf("[proses1] Timeout/Gagal menunggu balasan dari P2: %v", err)
+			}
+		*/
 		_, _ = unix.Read(evfd2, sigBuf[:])
 
 		// Baca pesan dari area baca RAM
 		length := p1ReadArea[0] + 1
 		fmt.Printf("📬Pesan diterima:\n%s\n👉Tulis pesan, lalu [ENTER]:\n", string(p1ReadArea[1:length]))
 	}
+}
+func waitForIO(fd int, events uint32, timeout time.Duration) error {
+	epfd, err := unix.EpollCreate1(0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(epfd)
+
+	event := unix.EpollEvent{Events: events, Fd: int32(fd)}
+	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, fd, &event); err != nil {
+		return err
+	}
+
+	epollEvents := make([]unix.EpollEvent, 1)
+	n, err := unix.EpollWait(epfd, epollEvents, int(timeout.Milliseconds()))
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("timeout setelah %v", timeout)
+	}
+	return nil
 }
