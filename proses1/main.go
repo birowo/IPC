@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 	"unsafe"
 
@@ -35,8 +36,8 @@ func main() {
 	defer unix.Munmap(shmData)
 
 	// Pisahkan area memori menjadi 2 bagian
-	p1WriteArea := shmData[:halfSize]
-	p1ReadArea := shmData[halfSize:]
+	writeArea := shmData[:halfSize]
+	readArea := shmData[halfSize:]
 
 	// 2. Buat 2 buah Eventfd untuk komunikasi dua arah
 	evfd1, _ := unix.Eventfd(0, unix.EFD_CLOEXEC) // Sinyal ke Proses 2
@@ -45,7 +46,7 @@ func main() {
 	defer unix.Close(evfd2)
 
 	// 3. Setup Unix Socket Listener
-	socketPath := "../memfd_2way.sock"
+	socketPath := filepath.Join(os.TempDir(), "ipc.sock")
 	os.Remove(socketPath)
 	addr, _ := net.ResolveUnixAddr("unix", socketPath)
 	listener, err := net.ListenUnix("unix", addr)
@@ -71,33 +72,37 @@ func main() {
 	}
 	fmt.Println("[shmFD, evfd1 & evfd2] terkirim secara aman.")
 
-	go func(p1WriteArea []byte, evfd1 int) {
+	go func(writeArea []byte, evfd1 int) {
 		var signalVal uint64 = 1
 		signalBytes := (*[8]byte)(unsafe.Pointer(&signalVal))[:]
 		for {
-			fmt.Println("👉Tulis pesan, lalu [ENTER]:")
-			length, _ := os.Stdin.Read(p1WriteArea[1:])
-			p1WriteArea[0] = byte(length)
-			fmt.Println("[proses1] data ditulis ke RAM.")
+			println("👉Tulis pesan, lalu [ENTER]:")
+			length, _ := os.Stdin.Read(writeArea[1:])
+			writeArea[0] = byte(length)
+			//pesan ditulis ke shared memory
 
-			// Picu evfd1 untuk membangunkan Proses 2
+			//Picu evfd1 untuk membangunkan proses2
 			_, _ = unix.Write(evfd1, signalBytes)
 		}
-	}(p1WriteArea, evfd1)
+	}(writeArea, evfd1)
 
 	var sigBuf [8]byte
 	for {
 		/*
 			err = waitForIO(evfd2, unix.EPOLLIN, 30*time.Second)
 			if err != nil {
-				log.Fatalf("[proses1] Timeout/Gagal menunggu balasan dari P2: %v", err)
+				log.Fatalf("[proses1] Timeout menunggu pesan dari P2: %v", err)
 			}
 		*/
 		_, _ = unix.Read(evfd2, sigBuf[:])
 
-		// Baca pesan dari area baca RAM
-		length := p1ReadArea[0] + 1
-		fmt.Printf("📬Pesan diterima:\n%s\n👉Tulis pesan, lalu [ENTER]:\n", string(p1ReadArea[1:length]))
+		//baca pesan dari shared memory
+		length := readArea[0] + 1
+		println(
+			"📬Pesan diterima:\n",
+			string(readArea[1:length]),
+			"\nTulis pesan, lalu [ENTER]:",
+		)
 	}
 }
 func waitForIO(fd int, events uint32, timeout time.Duration) error {
